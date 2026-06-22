@@ -1,0 +1,43 @@
+name: Render PlantUML Diagrams
+
+# Docs-as-Code: при каждом изменении .puml workflow перерисовывает диаграммы
+# в SVG/PNG и коммитит их обратно. Используется свежий plantuml.jar (а не
+# устаревший пакет из apt), чтобы корректно обрабатывалась библиотека C4-PlantUML.
+
+on:
+  push:
+    paths:
+      - 'diagrams/**/*.puml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    env:
+      PLANTUML_SECURITY_PROFILE: INTERNET
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Graphviz + Java, download PlantUML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz default-jre
+          curl -fsSL -o plantuml.jar \
+            https://repo1.maven.org/maven2/net/sourceforge/plantuml/plantuml/1.2024.7/plantuml-1.2024.7.jar
+
+      - name: Render .puml -> SVG and PNG
+        run: |
+          mkdir -p diagrams/rendered
+          java -jar plantuml.jar -tsvg -o rendered diagrams/*.puml
+          java -jar plantuml.jar -tpng -o rendered diagrams/*.puml
+          echo "Rendered files:"; ls -1 diagrams/rendered
+
+      - name: Commit rendered images back to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(docs): auto-render PlantUML diagrams [skip ci]"
+          file_pattern: 'diagrams/rendered/*'

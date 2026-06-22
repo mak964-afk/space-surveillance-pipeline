@@ -1,0 +1,92 @@
+@startuml bpmn_surveillance_end_to_end
+' =====================================================================
+'  BPMN-style сквозной конвейер обработки наблюдения за космическим
+'  объектом. Activity Diagram со swimlanes (пулы/дорожки = роли/сервисы).
+'  Акцент: блок ИИ-анализа выделен отдельной дорожкой.
+' =====================================================================
+title Сквозной конвейер: заявка -> съёмка -> ИИ-анализ -> каталог -> отчёт (BPMN)
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam ActivityBackgroundColor #EAF2FB
+skinparam ActivityBorderColor #2C6FB5
+skinparam ActivityDiamondBackgroundColor #FFF6E0
+skinparam ActivityDiamondBorderColor #C8902A
+skinparam swimlaneBorderColor #999999
+skinparam swimlaneTitleBackgroundColor #F0F0F0
+
+|#FDF1F1|Заказчик|
+start
+:Подаёт заявку
+(каталожный номер / TLE);
+
+|#E3F2FD|Баллистика|
+:Прогноз движения ОН;
+:Построить эфемериду;
+
+|#E8F5E9|Планирование|
+:Рассчитать окна видимости
+(высота, освещённость, метео, СН);
+if (Есть окна видимости?) then (да)
+  :Составить график сети
+  (18 инструментов, 13 пунктов);
+else (нет)
+  :Вернуть NO_VISIBILITY_WINDOWS;
+  |#FDF1F1|Заказчик|
+  :Расширяет интервал;
+  stop
+endif
+
+|#F3E5F5|Средство наблюдения|
+:Навестись в расчётную точку;
+:Снять участок неба / радиосеанс;
+:Передать сырой поток;
+
+|#ECEFF1|Конвейер обработки|
+:Сбор потока Debezium -> Kafka -> Flink;
+:Нормализация и калибровка
+(астрометрия, отбраковка шума);
+if (Кадр прошёл контроль качества?) then (да)
+  :Feature extraction:
+  выделить объекты, сигнатуры;
+else (нет)
+  :Кадр QUALITY_FAILED,
+  инцидент;
+  stop
+endif
+
+|#FFE0B2|ИИ-анализ (PyTorch/TensorFlow)|
+:Инференс по сигнатуре;
+if (ИИ-сервис доступен?) then (да)
+  if (Совпадение с эталоном?) then (известный)
+    :Метка IDENTIFIED + confidence;
+  elseif (Аномальное поведение?) then (аномалия)
+    :Метка ANOMALY,
+    приоритетное оповещение;
+  else (нет совпадения)
+    :Метка NEW_OBJECT;
+  endif
+else (нет)
+  :Буферизовать сигнатуру в очередь,
+  повтор после восстановления;
+  detach
+endif
+
+|#E3F2FD|Каталог / Орбита|
+:Уточнить вектор состояния
+(или завести новый ОН);
+:Сохранить в Data Lake
+(PostgreSQL + S3 + Iceberg);
+:Зафиксировать lineage (Atlas),
+событие catalog.updated;
+
+|#EAF2FB|Отчёт|
+:Собрать отчёт
+(идентификация, орбита, точность, СН);
+:Доставить по защищённому каналу;
+
+|#FDF1F1|Заказчик|
+:Получает отчёт;
+stop
+
+@enduml

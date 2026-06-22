@@ -1,0 +1,202 @@
+@startuml erd_ssdp
+' =====================================================================
+'  ER-модель данных Space Surveillance Data Pipeline.
+'  Каталог + измерения + результаты ИИ. Нотация: crow's foot.
+'  PK — первичный ключ, FK — внешний ключ. Кардинальность подписана.
+'  Сырые кадры хранятся в S3 (в БД — ссылка s3_uri).
+' =====================================================================
+title ERD — Space Surveillance Data Pipeline (PostgreSQL + S3 + Iceberg)
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+hide circle
+skinparam linetype ortho
+skinparam class {
+  BackgroundColor #EAF2FB
+  BorderColor #2C6FB5
+  ArrowColor #2C6FB5
+}
+
+entity "site" as site {
+  * id : UUID <<PK>>
+  --
+  * code : varchar(16)
+  * name : varchar(120)
+  * latitude : numeric(9,6)
+  * longitude : numeric(9,6)
+  * altitude_m : integer
+  * country : varchar(64)
+}
+
+entity "sensor" as sensor {
+  * id : UUID <<PK>>
+  --
+  * site_id : UUID <<FK>>
+  * code : varchar(16)
+  * type : varchar(16)          ' OPTICAL|RADAR
+  * aperture_mm : integer
+  * fov_deg : numeric(6,3)
+  * is_active : boolean
+}
+
+entity "observation_object" as obj {
+  * id : UUID <<PK>>
+  --
+  catalog_number : varchar(32)
+  * status : varchar(16)        ' KNOWN|NEW|LOST
+  * object_type : varchar(24)
+  designation : varchar(64)
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+
+entity "observation_request" as req {
+  * id : UUID <<PK>>
+  --
+  * customer_id : UUID
+  object_id : UUID <<FK>>
+  * source_type : varchar(16)   ' CATALOG|TLE
+  tle_line1 : varchar(70)
+  tle_line2 : varchar(70)
+  * interval_start : timestamptz
+  * interval_end : timestamptz
+  * priority : smallint
+  * status : varchar(24)
+  * created_at : timestamptz
+}
+
+entity "ephemeris" as eph {
+  * id : UUID <<PK>>
+  --
+  * request_id : UUID <<FK>>
+  * object_id : UUID <<FK>>
+  * epoch : timestamptz
+  * points : jsonb              ' координаты + скорость по времени
+  * computed_at : timestamptz
+}
+
+entity "visibility_window" as win {
+  * id : UUID <<PK>>
+  --
+  * request_id : UUID <<FK>>
+  * sensor_id : UUID <<FK>>
+  * start_at : timestamptz
+  * end_at : timestamptz
+  * max_elevation_deg : numeric(5,2)
+  * illumination_ok : boolean
+}
+
+entity "observation_task" as task {
+  * id : UUID <<PK>>
+  --
+  * window_id : UUID <<FK>>
+  * sensor_id : UUID <<FK>>
+  * scheduled_start : timestamptz
+  * status : varchar(16)        ' PLANNED|EXECUTING|DONE|ABORTED
+}
+
+entity "observation_session" as sess {
+  * id : UUID <<PK>>
+  --
+  * task_id : UUID <<FK>>
+  * sensor_id : UUID <<FK>>
+  * started_at : timestamptz
+  ended_at : timestamptz
+  * status : varchar(16)
+  abort_reason : varchar(64)
+}
+
+entity "raw_measurement" as raw {
+  * id : UUID <<PK>>
+  --
+  * session_id : UUID <<FK>>
+  * sensor_id : UUID <<FK>>
+  * frame_id : varchar(48)      ' UNIQUE (sensor_id, frame_id)
+  * captured_at : timestamptz
+  * s3_uri : varchar(256)       ' сырой кадр в S3
+  * quality_status : varchar(16)
+  * trace_id : varchar(64)
+}
+
+entity "signature" as sig {
+  * id : UUID <<PK>>
+  --
+  * raw_measurement_id : UUID <<FK>>
+  * astrometry : jsonb          ' координаты
+  * photometry : jsonb          ' блеск
+  features : jsonb
+  * extracted_at : timestamptz
+}
+
+entity "ai_classification" as cls {
+  * id : UUID <<PK>>
+  --
+  * signature_id : UUID <<FK>>
+  object_id : UUID <<FK>>
+  * verdict : varchar(16)       ' IDENTIFIED|NEW_OBJECT|ANOMALY
+  * confidence : numeric(5,4)
+  anomaly_type : varchar(32)
+  * model_version : varchar(32)
+  * verified_by_human : boolean
+  * classified_at : timestamptz
+}
+
+entity "orbit_state" as orb {
+  * id : UUID <<PK>>
+  --
+  * object_id : UUID <<FK>>
+  * epoch : timestamptz
+  * state_vector : jsonb        ' положение + скорость
+  * covariance : jsonb          ' доверительная область
+  * iceberg_version : varchar(32)
+  * created_at : timestamptz
+}
+
+entity "report" as rep {
+  * id : UUID <<PK>>
+  --
+  * request_id : UUID <<FK>>
+  * object_id : UUID <<FK>>
+  * is_priority : boolean
+  * payload : jsonb
+  * delivered_at : timestamptz
+}
+
+entity "outbox_event" as outbox {
+  * id : UUID <<PK>>
+  --
+  * aggregate_type : varchar(48)
+  * aggregate_id : UUID
+  * event_type : varchar(64)
+  * payload : jsonb
+  * created_at : timestamptz
+  * published_at : timestamptz
+}
+
+' --------- связи и кардинальность ---------
+site  ||--o{ sensor               : "1:M размещает"
+sensor ||--o{ visibility_window   : "1:M доступен в"
+sensor ||--o{ observation_task    : "1:M исполняет"
+sensor ||--o{ observation_session : "1:M ведёт"
+sensor ||--o{ raw_measurement     : "1:M фиксирует"
+observation_object ||--o{ observation_request : "1:M по объекту"
+observation_object ||--o{ ephemeris           : "1:M имеет"
+observation_object ||--o{ orbit_state         : "1:M история орбит"
+observation_request ||--o{ ephemeris          : "1:M порождает"
+observation_request ||--o{ visibility_window  : "1:M даёт окна"
+observation_request ||--o| report             : "1:1 завершается"
+visibility_window  ||--|| observation_task    : "1:1 назначает"
+observation_task   ||--o{ observation_session : "1:M исполнение"
+observation_session ||--o{ raw_measurement    : "1:M собирает"
+raw_measurement    ||--o{ signature           : "1:M извлекает"
+signature          ||--|| ai_classification   : "1:1 классифицирует"
+observation_object ||--o{ ai_classification   : "1:M связан с"
+
+note bottom of ai_classification
+  Результат ИИ-инференса (PyTorch/TensorFlow):
+  verdict + confidence + версия модели.
+  verified_by_human = true для пограничных
+  случаев (human-in-the-loop).
+end note
+
+@enduml

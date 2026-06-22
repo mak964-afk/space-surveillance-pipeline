@@ -1,0 +1,122 @@
+asyncapi: 2.6.0
+info:
+  title: Space Surveillance Data Pipeline — Event API
+  version: 1.0.0
+  description: >
+    Событийные контракты конвейера SSDP поверх Apache Kafka. Описывают потоковый
+    тракт от сырых измерений до результата ИИ-классификации и обновления каталога.
+    Сырой поток собирается через Debezium -> Kafka -> Flink; ИИ-результаты
+    публикуются сервисом анализа (PyTorch/TensorFlow).
+
+defaultContentType: application/json
+
+servers:
+  production:
+    url: kafka.ssa-center.example:9092
+    protocol: kafka
+    description: Производственный кластер Kafka
+
+channels:
+  raw.measurements:
+    description: Сырые измерения от средств наблюдения после нормализации во Flink.
+    publish:
+      operationId: publishRawMeasurement
+      summary: Поток сырых измерений (ingestion -> обработка).
+      message:
+        $ref: '#/components/messages/RawMeasurement'
+
+  signatures.extracted:
+    description: Извлечённые сигнатуры объектов, готовые к ИИ-анализу.
+    publish:
+      operationId: publishSignature
+      summary: Сигнатуры после feature extraction.
+      message:
+        $ref: '#/components/messages/Signature'
+
+  ai.classifications:
+    description: Результаты ИИ-классификации сигнатур (известный / новый / аномалия).
+    publish:
+      operationId: publishAiClassification
+      summary: Вердикт ИИ-модели по сигнатуре.
+      message:
+        $ref: '#/components/messages/AiClassification'
+
+  catalog.updated:
+    description: Уведомление об обновлении каталога после уточнения орбиты.
+    publish:
+      operationId: publishCatalogUpdated
+      summary: Каталог обновлён (новая версия орбиты/объекта).
+      message:
+        $ref: '#/components/messages/CatalogUpdated'
+
+components:
+  messages:
+    RawMeasurement:
+      name: RawMeasurement
+      title: Сырое измерение
+      contentType: application/json
+      payload:
+        type: object
+        required: [measurementId, sensorId, frameId, capturedAt, s3Uri, traceId]
+        properties:
+          measurementId: { type: string, format: uuid }
+          sensorId: { type: string, format: uuid }
+          frameId: { type: string, description: "Уникален в паре (sensorId, frameId)" }
+          capturedAt: { type: string, format: date-time }
+          s3Uri: { type: string, description: "Ссылка на сырой кадр в S3" }
+          traceId: { type: string }
+
+    Signature:
+      name: Signature
+      title: Сигнатура объекта
+      contentType: application/json
+      payload:
+        type: object
+        required: [signatureId, measurementId, extractedAt]
+        properties:
+          signatureId: { type: string, format: uuid }
+          measurementId: { type: string, format: uuid }
+          astrometry:
+            type: object
+            properties:
+              ra: { type: number, description: "Прямое восхождение, град" }
+              dec: { type: number, description: "Склонение, град" }
+          photometry:
+            type: object
+            properties:
+              magnitude: { type: number, description: "Звёздная величина" }
+          extractedAt: { type: string, format: date-time }
+
+    AiClassification:
+      name: AiClassification
+      title: Результат ИИ-классификации
+      contentType: application/json
+      payload:
+        type: object
+        required: [classificationId, signatureId, verdict, confidence, modelVersion, classifiedAt]
+        properties:
+          classificationId: { type: string, format: uuid }
+          signatureId: { type: string, format: uuid }
+          objectId: { type: string, format: uuid, description: "Заполняется для IDENTIFIED/ANOMALY" }
+          verdict:
+            type: string
+            enum: [IDENTIFIED, NEW_OBJECT, ANOMALY]
+          confidence: { type: number, minimum: 0, maximum: 1 }
+          anomalyType: { type: string, description: "Тип аномалии для verdict=ANOMALY" }
+          modelVersion: { type: string }
+          verifiedByHuman: { type: boolean }
+          classifiedAt: { type: string, format: date-time }
+
+    CatalogUpdated:
+      name: CatalogUpdated
+      title: Каталог обновлён
+      contentType: application/json
+      payload:
+        type: object
+        required: [objectId, orbitStateId, icebergVersion, updatedAt]
+        properties:
+          objectId: { type: string, format: uuid }
+          orbitStateId: { type: string, format: uuid }
+          isNewObject: { type: boolean }
+          icebergVersion: { type: string }
+          updatedAt: { type: string, format: date-time }

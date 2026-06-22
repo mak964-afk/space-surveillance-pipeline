@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: Space Surveillance Data Pipeline API
+  version: 1.0.0
+  description: >
+    Промышленный фрагмент синхронной спецификации SSDP. Ключевой метод приёма
+    заявки на наблюдение: по каталожному номеру или TLE система строит эфемериду
+    и планирует окна наблюдения. Событийные контракты конвейера — см. asyncapi.yaml.
+  contact:
+    name: SSDP Platform Team
+    email: ssdp-team@ssa-center.example
+servers:
+  - url: https://api.ssa-center.example/ssdp
+    description: Production
+  - url: https://api.staging.ssa-center.example/ssdp
+    description: Staging
+
+tags:
+  - name: Tasking
+    description: Приём и сопровождение заявок на наблюдение
+
+paths:
+  /api/v1/observation-requests:
+    post:
+      tags: [Tasking]
+      operationId: submitObservationRequest
+      summary: Подать заявку на наблюдение объекта
+      description: >
+        Принимает заявку с каталожным номером или TLE, инициирует баллистический
+        прогноз (эфемериду) и планирование окон видимости. Идемпотентна по
+        заголовку `Idempotency-Key`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+            example: "REQ-2026-06-22-0007"
+        - name: X-Request-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObservationRequest'
+            examples:
+              byCatalogNumber:
+                summary: Заявка по каталожному номеру
+                value:
+                  sourceType: "CATALOG"
+                  catalogNumber: "25544"
+                  intervalStart: "2026-06-23T18:00:00Z"
+                  intervalEnd: "2026-06-24T06:00:00Z"
+                  priority: 5
+              byTle:
+                summary: Заявка по TLE
+                value:
+                  sourceType: "TLE"
+                  tle:
+                    line1: "1 25544U 98067A   26173.54791667  .00016717  00000-0  10270-3 0  9005"
+                    line2: "2 25544  51.6400 208.9163 0006317  69.9862 290.2156 15.49500000 10000"
+                  intervalStart: "2026-06-23T18:00:00Z"
+                  intervalEnd: "2026-06-24T06:00:00Z"
+                  priority: 8
+      responses:
+        '202':
+          description: Заявка принята; запущены прогноз и планирование.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestAccepted'
+              examples:
+                accepted:
+                  value:
+                    requestId: "3a7b1f90-0000-4a00-9b00-c0ffeec0ffee"
+                    status: "EPHEMERIS_READY"
+                    objectId: "8f1c2d3e-0000-4a00-9b00-aaaaaaaaaaaa"
+                    plannedWindows:
+                      - sensorCode: "OPT-12"
+                        siteCode: "SITE-03"
+                        startAt: "2026-06-23T21:14:00Z"
+                        endAt: "2026-06-23T21:22:00Z"
+                        maxElevationDeg: 64.2
+                      - sensorCode: "OPT-05"
+                        siteCode: "SITE-07"
+                        startAt: "2026-06-24T01:08:00Z"
+                        endAt: "2026-06-24T01:13:00Z"
+                        maxElevationDeg: 41.7
+        '400':
+          description: Некорректный синтаксис запроса.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: "BAD_REQUEST"
+                message: "Field 'intervalEnd' is required"
+                requestId: "3a7b1f90-0000-4a00-9b00-c0ffeec0ffee"
+        '422':
+          description: Бизнес-валидация не пройдена.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                insufficientData:
+                  value:
+                    code: "INSUFFICIENT_ORBITAL_DATA"
+                    message: "Neither catalogNumber nor valid TLE provided"
+                    requestId: "3a7b1f90-0000-4a00-9b00-c0ffeec0ffee"
+                noWindows:
+                  value:
+                    code: "NO_VISIBILITY_WINDOWS"
+                    message: "Object does not rise above min elevation in the interval"
+                    requestId: "3a7b1f90-0000-4a00-9b00-c0ffeec0ffee"
+        '500':
+          description: Внутренняя ошибка сервиса.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: "INTERNAL_ERROR"
+                message: "Unexpected error, see requestId in logs"
+                requestId: "3a7b1f90-0000-4a00-9b00-c0ffeec0ffee"
+
+  /api/v1/observation-requests/{requestId}:
+    get:
+      tags: [Tasking]
+      operationId: getObservationRequest
+      summary: Получить статус и результат заявки
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Текущее состояние заявки.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RequestAccepted' }
+        '404':
+          description: Заявка не найдена.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  schemas:
+    ObservationRequest:
+      type: object
+      required: [sourceType, intervalStart, intervalEnd, priority]
+      properties:
+        sourceType:
+          type: string
+          enum: [CATALOG, TLE]
+        catalogNumber:
+          type: string
+          nullable: true
+          example: "25544"
+        tle:
+          $ref: '#/components/schemas/Tle'
+        intervalStart:
+          type: string
+          format: date-time
+        intervalEnd:
+          type: string
+          format: date-time
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 5
+
+    Tle:
+      type: object
+      required: [line1, line2]
+      properties:
+        line1:
+          type: string
+          maxLength: 70
+        line2:
+          type: string
+          maxLength: 70
+
+    RequestAccepted:
+      type: object
+      required: [requestId, status]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [REQUESTED, EPHEMERIS_READY, SCHEDULED, NO_VISIBILITY_WINDOWS, REPORTED]
+        objectId:
+          type: string
+          format: uuid
+          nullable: true
+        plannedWindows:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlannedWindow'
+
+    PlannedWindow:
+      type: object
+      required: [sensorCode, siteCode, startAt, endAt, maxElevationDeg]
+      properties:
+        sensorCode:
+          type: string
+          example: "OPT-12"
+        siteCode:
+          type: string
+          example: "SITE-03"
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+        maxElevationDeg:
+          type: number
+          format: double
+          example: 64.2
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: "INSUFFICIENT_ORBITAL_DATA"
+        message:
+          type: string
+        requestId:
+          type: string
+          format: uuid

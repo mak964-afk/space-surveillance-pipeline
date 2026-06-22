@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    id="Definitions_AIClassification"
+    targetNamespace="http://ssa-center.example/surveillance/bpmn">
+
+  <!-- ================================================================
+       Изолированный подпроцесс: "ИИ-анализ и классификация сигнатуры".
+       Service Task инференса на Model Serving (PyTorch/TensorFlow),
+       обработка недоступности модели (Boundary Error + Retry + таймер),
+       проверка уверенности (human-in-the-loop) и развилка вердикта
+       (известный / новый / аномалия). Готов к импорту в Camunda / Storm BPMN.
+  ================================================================= -->
+  <bpmn:process id="Process_AIClassification" name="ИИ-анализ и классификация сигнатуры" isExecutable="true">
+
+    <bpmn:startEvent id="StartEvent_1" name="Сигнатура готова к анализу">
+      <bpmn:outgoing>Flow_start_load</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:sequenceFlow id="Flow_start_load" sourceRef="StartEvent_1" targetRef="Task_LoadReferences" />
+
+    <bpmn:task id="Task_LoadReferences" name="Загрузить эталоны-кандидаты">
+      <bpmn:incoming>Flow_start_load</bpmn:incoming>
+      <bpmn:outgoing>Flow_load_infer</bpmn:outgoing>
+    </bpmn:task>
+
+    <bpmn:sequenceFlow id="Flow_load_infer" sourceRef="Task_LoadReferences" targetRef="Task_Inference" />
+
+    <!-- Service Task инференса с граничным событием ошибки -->
+    <bpmn:serviceTask id="Task_Inference" name="Инференс модели (PyTorch/TensorFlow)">
+      <bpmn:incoming>Flow_load_infer</bpmn:incoming>
+      <bpmn:incoming>Flow_retry_loop</bpmn:incoming>
+      <bpmn:outgoing>Flow_infer_confidence</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:boundaryEvent id="Boundary_ModelUnavailable" name="Model serving недоступен" attachedToRef="Task_Inference">
+      <bpmn:outgoing>Flow_error_retrycheck</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="ErrDef_1" errorRef="Error_ModelUnavailable" />
+    </bpmn:boundaryEvent>
+
+    <bpmn:sequenceFlow id="Flow_error_retrycheck" sourceRef="Boundary_ModelUnavailable" targetRef="Gateway_RetryCheck" />
+
+    <bpmn:exclusiveGateway id="Gateway_RetryCheck" name="Попытки исчерпаны?">
+      <bpmn:incoming>Flow_error_retrycheck</bpmn:incoming>
+      <bpmn:outgoing>Flow_retry_wait</bpmn:outgoing>
+      <bpmn:outgoing>Flow_retry_buffer</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="Flow_retry_wait" name="Нет (attempts &lt; 3)" sourceRef="Gateway_RetryCheck" targetRef="Timer_Backoff">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${attempts &lt; 3}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:intermediateCatchEvent id="Timer_Backoff" name="Backoff (экспоненциальный)">
+      <bpmn:incoming>Flow_retry_wait</bpmn:incoming>
+      <bpmn:outgoing>Flow_retry_loop</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="Timer_1">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">PT30S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:sequenceFlow id="Flow_retry_loop" sourceRef="Timer_Backoff" targetRef="Task_Inference" />
+
+    <bpmn:sequenceFlow id="Flow_retry_buffer" name="Да — в очередь" sourceRef="Gateway_RetryCheck" targetRef="Task_BufferSignature">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${attempts &gt;= 3}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:task id="Task_BufferSignature" name="Буферизовать сигнатуру (доанализ позже)">
+      <bpmn:incoming>Flow_retry_buffer</bpmn:incoming>
+      <bpmn:outgoing>Flow_buffer_end</bpmn:outgoing>
+    </bpmn:task>
+
+    <bpmn:sequenceFlow id="Flow_buffer_end" sourceRef="Task_BufferSignature" targetRef="EndEvent_Deferred" />
+
+    <bpmn:endEvent id="EndEvent_Deferred" name="Анализ отложен">
+      <bpmn:incoming>Flow_buffer_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Проверка уверенности (human-in-the-loop) -->
+    <bpmn:sequenceFlow id="Flow_infer_confidence" sourceRef="Task_Inference" targetRef="Gateway_Confidence" />
+
+    <bpmn:exclusiveGateway id="Gateway_Confidence" name="Уверенность >= порога?">
+      <bpmn:incoming>Flow_infer_confidence</bpmn:incoming>
+      <bpmn:outgoing>Flow_conf_high</bpmn:outgoing>
+      <bpmn:outgoing>Flow_conf_low</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="Flow_conf_low" name="Нет — на верификацию" sourceRef="Gateway_Confidence" targetRef="Task_HumanReview">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${confidence &lt; threshold}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="Task_HumanReview" name="Верификация аналитиком (human-in-the-loop)">
+      <bpmn:incoming>Flow_conf_low</bpmn:incoming>
+      <bpmn:outgoing>Flow_review_verdict</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:sequenceFlow id="Flow_review_verdict" sourceRef="Task_HumanReview" targetRef="Gateway_Verdict" />
+
+    <bpmn:sequenceFlow id="Flow_conf_high" name="Да" sourceRef="Gateway_Confidence" targetRef="Gateway_Verdict">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${confidence &gt;= threshold}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Развилка вердикта -->
+    <bpmn:exclusiveGateway id="Gateway_Verdict" name="Вердикт ИИ?">
+      <bpmn:incoming>Flow_conf_high</bpmn:incoming>
+      <bpmn:incoming>Flow_review_verdict</bpmn:incoming>
+      <bpmn:outgoing>Flow_identified</bpmn:outgoing>
+      <bpmn:outgoing>Flow_new</bpmn:outgoing>
+      <bpmn:outgoing>Flow_anomaly</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="Flow_identified" name="Известный" sourceRef="Gateway_Verdict" targetRef="Task_PublishIdentified">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${verdict == "IDENTIFIED"}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_new" name="Новый" sourceRef="Gateway_Verdict" targetRef="Task_PublishNew">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${verdict == "NEW_OBJECT"}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_anomaly" name="Аномалия" sourceRef="Gateway_Verdict" targetRef="Task_PublishAnomaly">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${verdict == "ANOMALY"}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:task id="Task_PublishIdentified" name="Публиковать IDENTIFIED">
+      <bpmn:incoming>Flow_identified</bpmn:incoming>
+      <bpmn:outgoing>Flow_id_end</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="Task_PublishNew" name="Публиковать NEW_OBJECT">
+      <bpmn:incoming>Flow_new</bpmn:incoming>
+      <bpmn:outgoing>Flow_new_end</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="Task_PublishAnomaly" name="Публиковать ANOMALY + оповещение">
+      <bpmn:incoming>Flow_anomaly</bpmn:incoming>
+      <bpmn:outgoing>Flow_anomaly_end</bpmn:outgoing>
+    </bpmn:task>
+
+    <bpmn:sequenceFlow id="Flow_id_end" sourceRef="Task_PublishIdentified" targetRef="EndEvent_Classified" />
+    <bpmn:sequenceFlow id="Flow_new_end" sourceRef="Task_PublishNew" targetRef="EndEvent_Classified" />
+    <bpmn:sequenceFlow id="Flow_anomaly_end" sourceRef="Task_PublishAnomaly" targetRef="EndEvent_Classified" />
+
+    <bpmn:endEvent id="EndEvent_Classified" name="Сигнатура классифицирована">
+      <bpmn:incoming>Flow_id_end</bpmn:incoming>
+      <bpmn:incoming>Flow_new_end</bpmn:incoming>
+      <bpmn:incoming>Flow_anomaly_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+  </bpmn:process>
+
+  <bpmn:error id="Error_ModelUnavailable" name="ModelUnavailable" errorCode="MODEL_UNAVAILABLE" />
+
+  <!-- ================== Diagram Interchange (DI) ================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_AIClassification">
+
+      <bpmndi:BPMNShape id="S_StartEvent_1" bpmnElement="StartEvent_1">
+        <dc:Bounds x="140" y="300" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="120" y="343" width="80" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_LoadReferences" bpmnElement="Task_LoadReferences">
+        <dc:Bounds x="220" y="278" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_Inference" bpmnElement="Task_Inference">
+        <dc:Bounds x="400" y="278" width="150" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Boundary_ModelUnavailable" bpmnElement="Boundary_ModelUnavailable">
+        <dc:Bounds x="457" y="340" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="495" y="372" width="80" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Gateway_RetryCheck" bpmnElement="Gateway_RetryCheck" isMarkerVisible="true">
+        <dc:Bounds x="455" y="450" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="445" y="505" width="70" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Timer_Backoff" bpmnElement="Timer_Backoff">
+        <dc:Bounds x="312" y="457" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="295" y="495" width="80" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_BufferSignature" bpmnElement="Task_BufferSignature">
+        <dc:Bounds x="600" y="435" width="160" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_EndEvent_Deferred" bpmnElement="EndEvent_Deferred">
+        <dc:Bounds x="822" y="457" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="805" y="500" width="70" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Gateway_Confidence" bpmnElement="Gateway_Confidence" isMarkerVisible="true">
+        <dc:Bounds x="615" y="293" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="600" y="348" width="80" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_HumanReview" bpmnElement="Task_HumanReview">
+        <dc:Bounds x="565" y="160" width="150" height="70" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Gateway_Verdict" bpmnElement="Gateway_Verdict" isMarkerVisible="true">
+        <dc:Bounds x="775" y="293" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="765" y="348" width="70" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_PublishIdentified" bpmnElement="Task_PublishIdentified">
+        <dc:Bounds x="900" y="150" width="150" height="70" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_PublishNew" bpmnElement="Task_PublishNew">
+        <dc:Bounds x="900" y="283" width="150" height="70" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Task_PublishAnomaly" bpmnElement="Task_PublishAnomaly">
+        <dc:Bounds x="900" y="410" width="150" height="70" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_EndEvent_Classified" bpmnElement="EndEvent_Classified">
+        <dc:Bounds x="1110" y="300" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1090" y="343" width="80" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="E_Flow_start_load" bpmnElement="Flow_start_load">
+        <di:waypoint x="176" y="318" /><di:waypoint x="220" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_load_infer" bpmnElement="Flow_load_infer">
+        <di:waypoint x="350" y="318" /><di:waypoint x="400" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_infer_confidence" bpmnElement="Flow_infer_confidence">
+        <di:waypoint x="550" y="318" /><di:waypoint x="615" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_error_retrycheck" bpmnElement="Flow_error_retrycheck">
+        <di:waypoint x="475" y="376" /><di:waypoint x="475" y="450" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_retry_wait" bpmnElement="Flow_retry_wait">
+        <di:waypoint x="455" y="475" /><di:waypoint x="348" y="475" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_retry_loop" bpmnElement="Flow_retry_loop">
+        <di:waypoint x="330" y="457" /><di:waypoint x="330" y="358" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_retry_buffer" bpmnElement="Flow_retry_buffer">
+        <di:waypoint x="505" y="475" /><di:waypoint x="600" y="475" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_buffer_end" bpmnElement="Flow_buffer_end">
+        <di:waypoint x="760" y="475" /><di:waypoint x="822" y="475" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_conf_low" bpmnElement="Flow_conf_low">
+        <di:waypoint x="640" y="293" /><di:waypoint x="640" y="230" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_review_verdict" bpmnElement="Flow_review_verdict">
+        <di:waypoint x="715" y="195" /><di:waypoint x="800" y="195" /><di:waypoint x="800" y="293" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_conf_high" bpmnElement="Flow_conf_high">
+        <di:waypoint x="665" y="318" /><di:waypoint x="775" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_identified" bpmnElement="Flow_identified">
+        <di:waypoint x="800" y="293" /><di:waypoint x="800" y="185" /><di:waypoint x="900" y="185" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_new" bpmnElement="Flow_new">
+        <di:waypoint x="825" y="318" /><di:waypoint x="900" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_anomaly" bpmnElement="Flow_anomaly">
+        <di:waypoint x="800" y="343" /><di:waypoint x="800" y="445" /><di:waypoint x="900" y="445" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_id_end" bpmnElement="Flow_id_end">
+        <di:waypoint x="1050" y="185" /><di:waypoint x="1128" y="185" /><di:waypoint x="1128" y="300" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_new_end" bpmnElement="Flow_new_end">
+        <di:waypoint x="1050" y="318" /><di:waypoint x="1110" y="318" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_Flow_anomaly_end" bpmnElement="Flow_anomaly_end">
+        <di:waypoint x="1050" y="445" /><di:waypoint x="1128" y="445" /><di:waypoint x="1128" y="336" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

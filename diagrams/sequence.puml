@@ -1,0 +1,107 @@
+@startuml sequence_ai_analysis
+' =====================================================================
+'  Ключевой и самый сложный сценарий: ИИ-анализ сигнатуры. Показаны
+'  потоковый вход (Kafka), инференс на Model Serving (PyTorch/TensorFlow),
+'  три исхода (известный / новый / аномалия), human-in-the-loop при
+'  низкой уверенности, а также сбой model serving с Timeout + Retry +
+'  Circuit Breaker и отложенным доанализом без потери сигнатур.
+' =====================================================================
+title Sequence — ИИ-анализ сигнатуры (Streaming + Inference + Retry + Circuit Breaker)
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam ParticipantBackgroundColor #EAF2FB
+skinparam ParticipantBorderColor #2C6FB5
+
+queue "Kafka\nsignatures.extracted" as KIn
+participant "AI Analysis\nService" as AI
+participant "Circuit Breaker" as CB
+participant "Model Serving\n(PyTorch/TensorFlow)" as MS
+database "Data Lake\n(catalog эталоны)" as DL
+actor "Аналитик\n(human-in-the-loop)" as An
+queue "Retry Queue" as RQ
+queue "Kafka\nai.classifications" as KOut
+participant "Catalog Service" as Cat
+
+autonumber
+
+KIn -> AI : signature(SIG-1, trace_id)
+activate AI
+AI -> AI : дедуп по (sensor_id, frame_id)
+AI -> DL : загрузить эталоны-кандидаты
+activate DL
+DL --> AI : набор эталонов
+deactivate DL
+
+AI -> CB : проверить состояние Model Serving
+activate CB
+CB --> AI : CLOSED (пропустить вызов)
+deactivate CB
+
+== Попытка инференса 1 (таймаут) ==
+AI -> MS : infer(SIG-1)
+activate MS
+note right of MS : Под нагрузкой / рестарт пода
+MS --> AI : timeout (> 2000 мс)
+deactivate MS
+AI -> CB : зафиксировать сбой
+
+== Попытка 2 (backoff 1s, ошибка) ==
+AI -> MS : infer(SIG-1)
+activate MS
+MS --> AI : HTTP 503
+deactivate MS
+AI -> CB : порог сбоев превышен
+activate CB
+CB --> CB : state -> OPEN
+CB --> AI : OPEN (быстрый отказ)
+deactivate CB
+
+AI -> RQ : enqueue Analyze(SIG-1)
+note over AI : Сигнатура НЕ теряется —\nдоанализ после восстановления
+AI --> KIn : ack (offset commit)
+deactivate AI
+
+... cooldown, Circuit Breaker -> HALF_OPEN ...
+
+RQ -> AI : повторная доставка Analyze(SIG-1)
+activate AI
+AI -> CB : проверить состояние
+activate CB
+CB --> AI : HALF_OPEN (пробный вызов)
+deactivate CB
+AI -> MS : infer(SIG-1)
+activate MS
+MS --> AI : result(class, confidence)
+deactivate MS
+AI -> CB : зафиксировать успех
+activate CB
+CB --> CB : state -> CLOSED
+deactivate CB
+
+alt confidence >= порог автоматического решения
+    alt Совпадение с эталоном (известный ОН)
+        AI -> KOut : publish IDENTIFIED(SIG-1, object_id, confidence)
+    else Нет совпадения
+        AI -> KOut : publish NEW_OBJECT(SIG-1, confidence)
+    else Аномальное поведение известного ОН
+        AI -> KOut : publish ANOMALY(SIG-1, object_id, type, confidence)
+        note right of KOut : Приоритетное оповещение
+    end
+else confidence < порога (пограничный случай)
+    AI -> An : направить на ручную верификацию
+    activate An
+    An --> AI : решение (класс подтверждён/исправлен)
+    deactivate An
+    AI -> KOut : publish классификацию (verified=true)
+end
+deactivate AI
+
+KOut -> Cat : результат классификации
+activate Cat
+Cat -> DL : уточнить орбиту / завести ОН\n+ версия (Iceberg) + lineage (Atlas)
+Cat -> KOut : publish catalog.updated
+deactivate Cat
+
+@enduml

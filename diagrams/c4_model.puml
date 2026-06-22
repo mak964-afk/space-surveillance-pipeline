@@ -1,0 +1,89 @@
+@startuml c4_ssdp
+' =====================================================================
+'  Модель C4 (уровень Context) для SSDP.
+'  Используется библиотека C4-PlantUML (C4_Context.puml).
+' =====================================================================
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+title C4 Level 1 — System Context: Space Surveillance Data Pipeline
+
+Person(customer, "Заказчик", "Подаёт заявку на наблюдение, получает отчёт")
+Person(operator, "Оператор / Аналитик", "Следит за сетью, верифицирует пограничные случаи ИИ")
+
+System(ssdp, "Space Surveillance Data Pipeline", "Планирование наблюдений, сбор и обработка данных, ИИ-анализ, каталог, отчёты")
+
+System_Ext(sensors, "Средства наблюдения (СН)", "18 телескопов и РЛС в 13 пунктах: наведение, съёмка, сырой поток")
+System_Ext(starCatalog, "Каталог звёзд", "Опорные данные для астрометрической калибровки")
+System_Ext(weather, "Метео-провайдер", "Условия освещённости и погоды для планирования")
+System_Ext(mlTraining, "ML Training Pipeline", "Обучение и поставка версий ИИ-моделей (вне scope)")
+
+Rel(customer, ssdp, "Заявка на наблюдение", "REST/HTTPS")
+Rel(ssdp, customer, "Отчёт по объекту", "Защищённый канал")
+Rel(operator, ssdp, "Мониторинг, верификация ИИ", "HTTPS")
+Rel(ssdp, sensors, "Команды наведения и съёмки", "gRPC/защищённый канал")
+Rel(sensors, ssdp, "Сырой поток измерений", "Stream/CDC")
+Rel(ssdp, starCatalog, "Опорные звёзды для калибровки", "REST")
+Rel(ssdp, weather, "Метеоданные для окон видимости", "REST")
+Rel(mlTraining, ssdp, "Версии ИИ-моделей", "Model registry")
+
+@enduml
+
+@startuml c4_ssdp_container
+' =====================================================================
+'  Модель C4 (уровень Container) для SSDP.
+'  Используется библиотека C4-PlantUML (C4_Container.puml).
+' =====================================================================
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+title C4 Level 2 — Container: внутри Space Surveillance Data Pipeline
+
+Person(customer, "Заказчик")
+Person(operator, "Оператор / Аналитик")
+System_Ext(sensors, "Средства наблюдения (СН)")
+System_Ext(mlTraining, "ML Training Pipeline")
+
+System_Boundary(ssdp, "Space Surveillance Data Pipeline") {
+    Container(intake, "Tasking / Intake API", "Java 21, Spring Boot", "REST: приём заявок, статусы, выдача отчётов")
+    Container(ballistics, "Ballistics Service", "Java/Python", "Прогноз движения, эфемериды, уточнение орбиты")
+    Container(planner, "Observation Planner", "Java 21", "Окна видимости, оптимальный график сети СН")
+    Container(control, "Sensor Control", "Java 21, gRPC", "Команды наведения, инициация съёмки, статусы СН")
+    Container(ingest, "Ingestion / Stream", "Debezium, Kafka, Flink", "CDC, буферизация, потоковая нормализация сырого потока")
+    Container(preproc, "Preprocessing", "Python", "Нормализация, калибровка, контроль качества")
+    Container(feature, "Feature Extraction", "Python", "Астрометрия, фотометрия, извлечение сигнатур")
+    Container(ai, "AI Analysis (Model Serving)", "PyTorch/TensorFlow, Triton", "Идентификация / новый объект / аномалия; CB + Retry")
+    Container(catalog, "Catalog Service", "Java 21", "Каталог ОН, орбиты, доверительные области")
+    Container(report, "Report Service", "Java 21", "Сборка и доставка отчётов заказчику")
+    Container(orchestr, "Orchestrator", "Apache Airflow", "Плановые и пакетные сценарии конвейера")
+    Container(ui, "Operator UI", "React", "Панели: орбиты, траектории, сигнатуры, статус конвейера")
+    ContainerQueue(kafka, "Event Bus", "Apache Kafka", "raw.measurements, signatures.extracted, ai.classifications, catalog.updated")
+    ContainerDb(lake, "Data Lake", "PostgreSQL + S3 + Iceberg", "Каталог, измерения, версии, аудит")
+    ContainerDb(atlas, "Data Governance", "Apache Atlas", "Lineage и аудит данных")
+}
+
+Rel(customer, intake, "Заявка / отчёт", "REST")
+Rel(operator, ui, "Мониторинг и верификация")
+Rel(intake, ballistics, "Запрос эфемериды", "gRPC")
+Rel(ballistics, planner, "Эфемерида")
+Rel(planner, control, "График наблюдений")
+Rel(control, sensors, "Наведение, съёмка", "gRPC")
+Rel(sensors, ingest, "Сырой поток", "CDC/Stream")
+Rel(ingest, kafka, "raw.measurements")
+Rel(kafka, preproc, "Сырые измерения")
+Rel(preproc, feature, "Чистые кадры")
+Rel(feature, kafka, "signatures.extracted")
+Rel(kafka, ai, "Сигнатуры на инференс")
+Rel(ai, mlTraining, "Загрузка версий моделей")
+Rel(ai, kafka, "ai.classifications")
+Rel(kafka, catalog, "Результаты классификации")
+Rel(catalog, ballistics, "Запрос уточнения орбиты")
+Rel(catalog, lake, "Запись каталога/орбит", "JDBC/S3")
+Rel(catalog, atlas, "Lineage и аудит")
+Rel(catalog, kafka, "catalog.updated")
+Rel(kafka, report, "Готовность данных")
+Rel(report, customer, "Отчёт", "Защищённый канал")
+Rel(orchestr, planner, "Плановые сценарии")
+Rel(ui, catalog, "Данные для визуализации")
+
+@enduml
