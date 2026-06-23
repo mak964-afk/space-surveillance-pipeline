@@ -3,9 +3,7 @@
 > Системный анализ и проектирование микросервисного конвейера обработки сигналов
 > наблюдения за космическими объектами: от заявки заказчика и планирования работы
 > средств наблюдения – через съёмку участка неба и потоковую обработку – к
-> **ИИ-анализу** данных, уточнению каталога и отчёту. Репозиторий ведётся в
-> концепции **Docs as Code**: документация, требования и диаграммы хранятся в Git,
-> ревьюятся через Pull Request и автоматически рендерятся в CI.
+> **ИИ-анализу** данных, уточнению каталога и отчёту.
 
 ![Status](https://img.shields.io/badge/status-design--ready-blue)
 ![Methodology](https://img.shields.io/badge/methodology-Docs--as--Code-green)
@@ -161,13 +159,10 @@ space-surveillance-pipeline/
 │   ├── sequence.puml             ← Sequence: ИИ-анализ сигнатуры (стриминг + CB)
 │   ├── erd.puml                  ← ER-модель каталога/данных (PK/FK, кардинальность)
 │   ├── bpmn_core.xml             ← BPMN 2.0 XML подпроцесса ИИ-классификации
-│   └── rendered/                 ← PNG/SVG, генерируются автоматически в CI
-├── api/
-│   ├── specification.yaml         ← OpenAPI 3.0: POST /observation-requests
-│   └── asyncapi.yaml              ← AsyncAPI 2.x: событийные Kafka-топики конвейера
-└── .github/
-    └── workflows/
-        └── render-diagrams.yml    ← CI: авто-рендер .puml → PNG/SVG при push
+│   └── rendered/                 ← отрисованные PNG/SVG диаграмм
+└── api/
+    ├── specification.yaml         ← OpenAPI 3.0: POST /observation-requests
+    └── asyncapi.yaml              ← AsyncAPI 2.x: событийные Kafka-топики конвейера
 ```
 
 ### Как читать проект
@@ -198,19 +193,9 @@ space-surveillance-pipeline/
 
 ---
 
-## 5. Диаграммы и автоматический рендеринг (CI)
+## 5. Диаграммы
 
-Все диаграммы написаны как код в PlantUML (`diagrams/*.puml`). GitHub **не**
-рендерит PlantUML нативно, поэтому в репозитории настроен GitHub Actions workflow
-[`.github/workflows/render-diagrams.yml`](.github/workflows/render-diagrams.yml):
-при каждом `push` с изменением `.puml` он скачивает свежий `plantuml.jar`,
-перерисовывает схемы в SVG/PNG (в папку `diagrams/rendered/`) и коммитит их
-обратно. Это и есть **Docs-as-Code**: исходники схем и их картинки всегда
-синхронны, ручной экспорт не нужен.
-
-> Картинки ниже подтянутся автоматически **после первого запуска workflow**
-> (первый `push` в `main` либо ручной запуск во вкладке *Actions → Render
-> PlantUML Diagrams → Run workflow*).
+Ключевые схемы проекта – от бизнес-процесса к данным: сквозной конвейер (BPMN), архитектура (C4: контекст и контейнеры), главный технический сценарий (Sequence), модель данных (ERD) и жизненный цикл обработки наблюдения.
 
 ### Сквозной конвейер (BPMN)
 
