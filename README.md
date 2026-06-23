@@ -6,7 +6,6 @@
 > **ИИ-анализу** данных, уточнению каталога и отчёту.
 
 ![Status](https://img.shields.io/badge/status-design--ready-blue)
-![Methodology](https://img.shields.io/badge/methodology-Docs--as--Code-green)
 ![Notation](https://img.shields.io/badge/notation-C4%20%7C%20BPMN%202.0%20%7C%20UML-orange)
 ![API](https://img.shields.io/badge/API-OpenAPI%20%7C%20AsyncAPI-6BA539)
 ![AI](https://img.shields.io/badge/AI-PyTorch%20%2F%20TensorFlow-EE4C2C)
