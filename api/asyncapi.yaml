@@ -1,6 +1,6 @@
 asyncapi: 2.6.0
 info:
-  title: Space Surveillance Data Pipeline — Event API
+  title: Space Surveillance Data Pipeline – Event API
   version: 1.0.0
   description: >
     Событийные контракты конвейера SSDP поверх Apache Kafka. Описывают потоковый

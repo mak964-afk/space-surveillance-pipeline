@@ -64,7 +64,7 @@
 
     <bpmn:sequenceFlow id="Flow_retry_loop" sourceRef="Timer_Backoff" targetRef="Task_Inference" />
 
-    <bpmn:sequenceFlow id="Flow_retry_buffer" name="Да — в очередь" sourceRef="Gateway_RetryCheck" targetRef="Task_BufferSignature">
+    <bpmn:sequenceFlow id="Flow_retry_buffer" name="Да – в очередь" sourceRef="Gateway_RetryCheck" targetRef="Task_BufferSignature">
       <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${attempts &gt;= 3}</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
 
@@ -88,7 +88,7 @@
       <bpmn:outgoing>Flow_conf_low</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <bpmn:sequenceFlow id="Flow_conf_low" name="Нет — на верификацию" sourceRef="Gateway_Confidence" targetRef="Task_HumanReview">
+    <bpmn:sequenceFlow id="Flow_conf_low" name="Нет – на верификацию" sourceRef="Gateway_Confidence" targetRef="Task_HumanReview">
       <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">${confidence &lt; threshold}</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
 

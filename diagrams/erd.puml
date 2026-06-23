@@ -2,10 +2,10 @@
 ' =====================================================================
 '  ER-модель данных Space Surveillance Data Pipeline.
 '  Каталог + измерения + результаты ИИ. Нотация: crow's foot.
-'  PK — первичный ключ, FK — внешний ключ. Кардинальность подписана.
-'  Сырые кадры хранятся в S3 (в БД — ссылка s3_uri).
+'  PK – первичный ключ, FK – внешний ключ. Кардинальность подписана.
+'  Сырые кадры хранятся в S3 (в БД – ссылка s3_uri).
 ' =====================================================================
-title ERD — Space Surveillance Data Pipeline (PostgreSQL + S3 + Iceberg)
+title ERD – Space Surveillance Data Pipeline (PostgreSQL + S3 + Iceberg)
 
 skinparam backgroundColor #FFFFFF
 skinparam shadowing false

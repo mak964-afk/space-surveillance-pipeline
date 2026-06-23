@@ -6,7 +6,7 @@
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
 LAYOUT_WITH_LEGEND()
-title C4 Level 1 — System Context: Space Surveillance Data Pipeline
+title C4 Level 1 – System Context: Space Surveillance Data Pipeline
 
 Person(customer, "Заказчик", "Подаёт заявку на наблюдение, получает отчёт")
 Person(operator, "Оператор / Аналитик", "Следит за сетью, верифицирует пограничные случаи ИИ")
@@ -37,7 +37,7 @@ Rel(mlTraining, ssdp, "Версии ИИ-моделей", "Model registry")
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
 LAYOUT_WITH_LEGEND()
-title C4 Level 2 — Container: внутри Space Surveillance Data Pipeline
+title C4 Level 2 – Container: внутри Space Surveillance Data Pipeline
 
 Person(customer, "Заказчик")
 Person(operator, "Оператор / Аналитик")

@@ -6,7 +6,7 @@
 '  низкой уверенности, а также сбой model serving с Timeout + Retry +
 '  Circuit Breaker и отложенным доанализом без потери сигнатур.
 ' =====================================================================
-title Sequence — ИИ-анализ сигнатуры (Streaming + Inference + Retry + Circuit Breaker)
+title Sequence – ИИ-анализ сигнатуры (Streaming + Inference + Retry + Circuit Breaker)
 
 skinparam backgroundColor #FFFFFF
 skinparam shadowing false
@@ -59,7 +59,7 @@ CB --> AI : OPEN (быстрый отказ)
 deactivate CB
 
 AI -> RQ : enqueue Analyze(SIG-1)
-note over AI : Сигнатура НЕ теряется —\nдоанализ после восстановления
+note over AI : Сигнатура НЕ теряется –\nдоанализ после восстановления
 AI --> KIn : ack (offset commit)
 deactivate AI
 
